@@ -36,7 +36,7 @@ const store = new Vuex.Store({
         visiblePens: ['html', 'js', 'console'],
         activePen: 'js',
         autoRun: false,
-        editorStatus: 'saved',
+        editorStatus: 'saved', //'saved, error, changed,saving
         transforming: false,
     },
     mutations:{
@@ -44,11 +44,27 @@ const store = new Vuex.Store({
             state.activePen = pen;
             console.log('state',state);
         },
+        UPDATE_CODE(state, payload){
+            let { type, code} = payload
+            state[type].code = code;
+        },
+        SET_EDITOR_STATUS(state, payload){
+            let { status } = payload;
+            state.editorStatus = status;
+        }
     },
     actions:{
         setActivePen({ commit },pen){
         
             commit('ACTIVE_PEN', pen);
+        },
+        updateCode({ commit }, payload){
+            commit('UPDATE_CODE', payload)
+        },
+
+        //editor各种状态
+        editorChanged({ commit }, payload){
+            commit('SET_EDITOR_STATUS', payload);
         }
     }
 

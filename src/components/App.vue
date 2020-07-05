@@ -1,5 +1,5 @@
 <template>
-  <div id="app">
+  <div id="app" class="root">
     <router-view />
   </div>
 </template>
@@ -9,3 +9,9 @@
     name: 'app'
   }
 </script>
+<style lang="stylus">
+    .root{
+        height: 100vh;
+        width: 100%;
+    }
+</style>

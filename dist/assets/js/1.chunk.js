@@ -1,5 +1,712 @@
 (window["webpackJsonp"] = window["webpackJsonp"] || []).push([[1],{
 
+/***/ "./node_modules/@iconfu/svg-inject/dist/svg-inject.js":
+/*!************************************************************!*\
+  !*** ./node_modules/@iconfu/svg-inject/dist/svg-inject.js ***!
+  \************************************************************/
+/*! no static exports found */
+/***/ (function(module, exports, __webpack_require__) {
+
+/**
+ * SVGInject - Version 1.2.3
+ * A tiny, intuitive, robust, caching solution for injecting SVG files inline into the DOM.
+ *
+ * https://github.com/iconfu/svg-inject
+ *
+ * Copyright (c) 2018 INCORS, the creators of iconfu.com
+ * @license MIT License - https://github.com/iconfu/svg-inject/blob/master/LICENSE
+ */
+
+(function(window, document) {
+  // constants for better minification
+  var _CREATE_ELEMENT_ = 'createElement';
+  var _GET_ELEMENTS_BY_TAG_NAME_ = 'getElementsByTagName';
+  var _LENGTH_ = 'length';
+  var _STYLE_ = 'style';
+  var _TITLE_ = 'title';
+  var _UNDEFINED_ = 'undefined';
+  var _SET_ATTRIBUTE_ = 'setAttribute';
+  var _GET_ATTRIBUTE_ = 'getAttribute';
+
+  var NULL = null;
+
+  // constants
+  var __SVGINJECT = '__svgInject';
+  var ID_SUFFIX = '--inject-';
+  var ID_SUFFIX_REGEX = new RegExp(ID_SUFFIX + '\\d+', "g");
+  var LOAD_FAIL = 'LOAD_FAIL';
+  var SVG_NOT_SUPPORTED = 'SVG_NOT_SUPPORTED';
+  var SVG_INVALID = 'SVG_INVALID';
+  var ATTRIBUTE_EXCLUSION_NAMES = ['src', 'alt', 'onload', 'onerror'];
+  var A_ELEMENT = document[_CREATE_ELEMENT_]('a');
+  var IS_SVG_SUPPORTED = typeof SVGRect != _UNDEFINED_;
+  var DEFAULT_OPTIONS = {
+    useCache: true,
+    copyAttributes: true,
+    makeIdsUnique: true
+  };
+  // Map of IRI referenceable tag names to properties that can reference them. This is defined in
+  // https://www.w3.org/TR/SVG11/linking.html#processingIRI
+  var IRI_TAG_PROPERTIES_MAP = {
+    clipPath: ['clip-path'],
+    'color-profile': NULL,
+    cursor: NULL,
+    filter: NULL,
+    linearGradient: ['fill', 'stroke'],
+    marker: ['marker', 'marker-end', 'marker-mid', 'marker-start'],
+    mask: NULL,
+    pattern: ['fill', 'stroke'],
+    radialGradient: ['fill', 'stroke']
+  };
+  var INJECTED = 1;
+  var FAIL = 2;
+
+  var uniqueIdCounter = 1;
+  var xmlSerializer;
+  var domParser;
+
+
+  // creates an SVG document from an SVG string
+  function svgStringToSvgDoc(svgStr) {
+    domParser = domParser || new DOMParser();
+    return domParser.parseFromString(svgStr, 'text/xml');
+  }
+
+
+  // searializes an SVG element to an SVG string
+  function svgElemToSvgString(svgElement) {
+    xmlSerializer = xmlSerializer || new XMLSerializer();
+    return xmlSerializer.serializeToString(svgElement);
+  }
+
+
+  // Returns the absolute url for the specified url
+  function getAbsoluteUrl(url) {
+    A_ELEMENT.href = url;
+    return A_ELEMENT.href;
+  }
+
+
+  // Load svg with an XHR request
+  function loadSvg(url, callback, errorCallback) {
+    if (url) {
+      var req = new XMLHttpRequest();
+      req.onreadystatechange = function() {
+        if (req.readyState == 4) {
+          // readyState is DONE
+          var status = req.status;
+          if (status == 200) {
+            // request status is OK
+            callback(req.responseXML, req.responseText.trim());
+          } else if (status >= 400) {
+            // request status is error (4xx or 5xx)
+            errorCallback();
+          } else if (status == 0) {
+            // request status 0 can indicate a failed cross-domain call
+            errorCallback();
+          }
+        }
+      };
+      req.open('GET', url, true);
+      req.send();
+    }
+  }
+
+
+  // Copy attributes from img element to svg element
+  function copyAttributes(imgElem, svgElem) {
+    var attribute;
+    var attributeName;
+    var attributeValue;
+    var attributes = imgElem.attributes;
+    for (var i = 0; i < attributes[_LENGTH_]; i++) {
+      attribute = attributes[i];
+      attributeName = attribute.name;
+      // Only copy attributes not explicitly excluded from copying
+      if (ATTRIBUTE_EXCLUSION_NAMES.indexOf(attributeName) == -1) {
+        attributeValue = attribute.value;
+        // If img attribute is "title", insert a title element into SVG element
+        if (attributeName == _TITLE_) {
+          var titleElem;
+          var firstElementChild = svgElem.firstElementChild;
+          if (firstElementChild && firstElementChild.localName.toLowerCase() == _TITLE_) {
+            // If the SVG element's first child is a title element, keep it as the title element
+            titleElem = firstElementChild;
+          } else {
+            // If the SVG element's first child element is not a title element, create a new title
+            // ele,emt and set it as the first child
+            titleElem = document[_CREATE_ELEMENT_ + 'NS']('http://www.w3.org/2000/svg', _TITLE_);
+            svgElem.insertBefore(titleElem, firstElementChild);
+          }
+          // Set new title content
+          titleElem.textContent = attributeValue;
+        } else {
+          // Set img attribute to svg element
+          svgElem[_SET_ATTRIBUTE_](attributeName, attributeValue);
+        }
+      }
+    }
+  }
+
+
+  // This function appends a suffix to IDs of referenced elements in the <defs> in order to  to avoid ID collision
+  // between multiple injected SVGs. The suffix has the form "--inject-X", where X is a running number which is
+  // incremented with each injection. References to the IDs are adjusted accordingly.
+  // We assume tha all IDs within the injected SVG are unique, therefore the same suffix can be used for all IDs of one
+  // injected SVG.
+  // If the onlyReferenced argument is set to true, only those IDs will be made unique that are referenced from within the SVG
+  function makeIdsUnique(svgElem, onlyReferenced) {
+    var idSuffix = ID_SUFFIX + uniqueIdCounter++;
+    // Regular expression for functional notations of an IRI references. This will find occurences in the form
+    // url(#anyId) or url("#anyId") (for Internet Explorer) and capture the referenced ID
+    var funcIriRegex = /url\("?#([a-zA-Z][\w:.-]*)"?\)/g;
+    // Get all elements with an ID. The SVG spec recommends to put referenced elements inside <defs> elements, but
+    // this is not a requirement, therefore we have to search for IDs in the whole SVG.
+    var idElements = svgElem.querySelectorAll('[id]');
+    var idElem;
+    // An object containing referenced IDs  as keys is used if only referenced IDs should be uniquified.
+    // If this object does not exist, all IDs will be uniquified.
+    var referencedIds = onlyReferenced ? [] : NULL;
+    var tagName;
+    var iriTagNames = {};
+    var iriProperties = [];
+    var changed = false;
+    var i, j;
+
+    if (idElements[_LENGTH_]) {
+      // Make all IDs unique by adding the ID suffix and collect all encountered tag names
+      // that are IRI referenceable from properities.
+      for (i = 0; i < idElements[_LENGTH_]; i++) {
+        tagName = idElements[i].localName; // Use non-namespaced tag name
+        // Make ID unique if tag name is IRI referenceable
+        if (tagName in IRI_TAG_PROPERTIES_MAP) {
+          iriTagNames[tagName] = 1;
+        }
+      }
+      // Get all properties that are mapped to the found IRI referenceable tags
+      for (tagName in iriTagNames) {
+        (IRI_TAG_PROPERTIES_MAP[tagName] || [tagName]).forEach(function (mappedProperty) {
+          // Add mapped properties to array of iri referencing properties.
+          // Use linear search here because the number of possible entries is very small (maximum 11)
+          if (iriProperties.indexOf(mappedProperty) < 0) {
+            iriProperties.push(mappedProperty);
+          }
+        });
+      }
+      if (iriProperties[_LENGTH_]) {
+        // Add "style" to properties, because it may contain references in the form 'style="fill:url(#myFill)"'
+        iriProperties.push(_STYLE_);
+      }
+      // Run through all elements of the SVG and replace IDs in references.
+      // To get all descending elements, getElementsByTagName('*') seems to perform faster than querySelectorAll('*').
+      // Since svgElem.getElementsByTagName('*') does not return the svg element itself, we have to handle it separately.
+      var descElements = svgElem[_GET_ELEMENTS_BY_TAG_NAME_]('*');
+      var element = svgElem;
+      var propertyName;
+      var value;
+      var newValue;
+      for (i = -1; element != NULL;) {
+        if (element.localName == _STYLE_) {
+          // If element is a style element, replace IDs in all occurences of "url(#anyId)" in text content
+          value = element.textContent;
+          newValue = value && value.replace(funcIriRegex, function(match, id) {
+            if (referencedIds) {
+              referencedIds[id] = 1;
+            }
+            return 'url(#' + id + idSuffix + ')';
+          });
+          if (newValue !== value) {
+            element.textContent = newValue;
+          }
+        } else if (element.hasAttributes()) {
+          // Run through all property names for which IDs were found
+          for (j = 0; j < iriProperties[_LENGTH_]; j++) {
+            propertyName = iriProperties[j];
+            value = element[_GET_ATTRIBUTE_](propertyName);
+            newValue = value && value.replace(funcIriRegex, function(match, id) {
+              if (referencedIds) {
+                referencedIds[id] = 1;
+              }
+                return 'url(#' + id + idSuffix + ')';
+            });
+            if (newValue !== value) {
+              element[_SET_ATTRIBUTE_](propertyName, newValue);
+            }
+          }
+          // Replace IDs in xlink:ref and href attributes
+          ['xlink:href', 'href'].forEach(function(refAttrName) {
+            var iri = element[_GET_ATTRIBUTE_](refAttrName);
+            if (/^\s*#/.test(iri)) { // Check if iri is non-null and internal reference
+              iri = iri.trim();
+              element[_SET_ATTRIBUTE_](refAttrName, iri + idSuffix);
+              if (referencedIds) {
+                // Add ID to referenced IDs
+                referencedIds[iri.substring(1)] = 1;
+              }
+            }
+          });
+        }
+        element = descElements[++i];
+      }
+      for (i = 0; i < idElements[_LENGTH_]; i++) {
+        idElem = idElements[i];
+        // If set of referenced IDs exists, make only referenced IDs unique,
+        // otherwise make all IDs unique.
+        if (!referencedIds || referencedIds[idElem.id]) {
+          // Add suffix to element's ID
+          idElem.id += idSuffix;
+          changed = true;
+        }
+      }
+    }
+    // return true if SVG element has changed
+    return changed;
+  }
+
+
+  // For cached SVGs the IDs are made unique by simply replacing the already inserted unique IDs with a
+  // higher ID counter. This is much more performant than a call to makeIdsUnique().
+  function makeIdsUniqueCached(svgString) {
+    return svgString.replace(ID_SUFFIX_REGEX, ID_SUFFIX + uniqueIdCounter++);
+  }
+
+
+  // Inject SVG by replacing the img element with the SVG element in the DOM
+  function inject(imgElem, svgElem, absUrl, options) {
+    if (svgElem) {
+      svgElem[_SET_ATTRIBUTE_]('data-inject-url', absUrl);
+      var parentNode = imgElem.parentNode;
+      if (parentNode) {
+        if (options.copyAttributes) {
+          copyAttributes(imgElem, svgElem);
+        }
+        // Invoke beforeInject hook if set
+        var beforeInject = options.beforeInject;
+        var injectElem = (beforeInject && beforeInject(imgElem, svgElem)) || svgElem;
+        // Replace img element with new element. This is the actual injection.
+        parentNode.replaceChild(injectElem, imgElem);
+        // Mark img element as injected
+        imgElem[__SVGINJECT] = INJECTED;
+        removeOnLoadAttribute(imgElem);
+        // Invoke afterInject hook if set
+        var afterInject = options.afterInject;
+        if (afterInject) {
+          afterInject(imgElem, injectElem);
+        }
+      }
+    } else {
+      svgInvalid(imgElem, options);
+    }
+  }
+
+
+  // Merges any number of options objects into a new object
+  function mergeOptions() {
+    var mergedOptions = {};
+    var args = arguments;
+    // Iterate over all specified options objects and add all properties to the new options object
+    for (var i = 0; i < args[_LENGTH_]; i++) {
+      var argument = args[i];
+        for (var key in argument) {
+          if (argument.hasOwnProperty(key)) {
+            mergedOptions[key] = argument[key];
+          }
+        }
+      }
+    return mergedOptions;
+  }
+
+
+  // Adds the specified CSS to the document's <head> element
+  function addStyleToHead(css) {
+    var head = document[_GET_ELEMENTS_BY_TAG_NAME_]('head')[0];
+    if (head) {
+      var style = document[_CREATE_ELEMENT_](_STYLE_);
+      style.type = 'text/css';
+      style.appendChild(document.createTextNode(css));
+      head.appendChild(style);
+    }
+  }
+
+
+  // Builds an SVG element from the specified SVG string
+  function buildSvgElement(svgStr, verify) {
+    if (verify) {
+      var svgDoc;
+      try {
+        // Parse the SVG string with DOMParser
+        svgDoc = svgStringToSvgDoc(svgStr);
+      } catch(e) {
+        return NULL;
+      }
+      if (svgDoc[_GET_ELEMENTS_BY_TAG_NAME_]('parsererror')[_LENGTH_]) {
+        // DOMParser does not throw an exception, but instead puts parsererror tags in the document
+        return NULL;
+      }
+      return svgDoc.documentElement;
+    } else {
+      var div = document.createElement('div');
+      div.innerHTML = svgStr;
+      return div.firstElementChild;
+    }
+  }
+
+
+  function removeOnLoadAttribute(imgElem) {
+    // Remove the onload attribute. Should only be used to remove the unstyled image flash protection and
+    // make the element visible, not for removing the event listener.
+    imgElem.removeAttribute('onload');
+  }
+
+
+  function errorMessage(msg) {
+    console.error('SVGInject: ' + msg);
+  }
+
+
+  function fail(imgElem, status, options) {
+    imgElem[__SVGINJECT] = FAIL;
+    if (options.onFail) {
+      options.onFail(imgElem, status);
+    } else {
+      errorMessage(status);
+    }
+  }
+
+
+  function svgInvalid(imgElem, options) {
+    removeOnLoadAttribute(imgElem);
+    fail(imgElem, SVG_INVALID, options);
+  }
+
+
+  function svgNotSupported(imgElem, options) {
+    removeOnLoadAttribute(imgElem);
+    fail(imgElem, SVG_NOT_SUPPORTED, options);
+  }
+
+
+  function loadFail(imgElem, options) {
+    fail(imgElem, LOAD_FAIL, options);
+  }
+
+
+  function removeEventListeners(imgElem) {
+    imgElem.onload = NULL;
+    imgElem.onerror = NULL;
+  }
+
+
+  function imgNotSet(msg) {
+    errorMessage('no img element');
+  }
+
+
+  function createSVGInject(globalName, options) {
+    var defaultOptions = mergeOptions(DEFAULT_OPTIONS, options);
+    var svgLoadCache = {};
+
+    if (IS_SVG_SUPPORTED) {
+      // If the browser supports SVG, add a small stylesheet that hides the <img> elements until
+      // injection is finished. This avoids showing the unstyled SVGs before style is applied.
+      addStyleToHead('img[onload^="' + globalName + '("]{visibility:hidden;}');
+    }
+
+
+    /**
+     * SVGInject
+     *
+     * Injects the SVG specified in the `src` attribute of the specified `img` element or array of `img`
+     * elements. Returns a Promise object which resolves if all passed in `img` elements have either been
+     * injected or failed to inject (Only if a global Promise object is available like in all modern browsers
+     * or through a polyfill).
+     *
+     * Options:
+     * useCache: If set to `true` the SVG will be cached using the absolute URL. Default value is `true`.
+     * copyAttributes: If set to `true` the attributes will be copied from `img` to `svg`. Dfault value
+     *     is `true`.
+     * makeIdsUnique: If set to `true` the ID of elements in the `<defs>` element that can be references by
+     *     property values (for example 'clipPath') are made unique by appending "--inject-X", where X is a
+     *     running number which increases with each injection. This is done to avoid duplicate IDs in the DOM.
+     * beforeLoad: Hook before SVG is loaded. The `img` element is passed as a parameter. If the hook returns
+     *     a string it is used as the URL instead of the `img` element's `src` attribute.
+     * afterLoad: Hook after SVG is loaded. The loaded `svg` element and `svg` string are passed as a
+     *     parameters. If caching is active this hook will only get called once for injected SVGs with the
+     *     same absolute path. Changes to the `svg` element in this hook will be applied to all injected SVGs
+     *     with the same absolute path. It's also possible to return an `svg` string or `svg` element which
+     *     will then be used for the injection.
+     * beforeInject: Hook before SVG is injected. The `img` and `svg` elements are passed as parameters. If
+     *     any html element is returned it gets injected instead of applying the default SVG injection.
+     * afterInject: Hook after SVG is injected. The `img` and `svg` elements are passed as parameters.
+     * onAllFinish: Hook after all `img` elements passed to an SVGInject() call have either been injected or
+     *     failed to inject.
+     * onFail: Hook after injection fails. The `img` element and a `status` string are passed as an parameter.
+     *     The `status` can be either `'SVG_NOT_SUPPORTED'` (the browser does not support SVG),
+     *     `'SVG_INVALID'` (the SVG is not in a valid format) or `'LOAD_FAILED'` (loading of the SVG failed).
+     *
+     * @param {HTMLImageElement} img - an img element or an array of img elements
+     * @param {Object} [options] - optional parameter with [options](#options) for this injection.
+     */
+    function SVGInject(img, options) {
+      options = mergeOptions(defaultOptions, options);
+
+      var run = function(resolve) {
+        var allFinish = function() {
+          var onAllFinish = options.onAllFinish;
+          if (onAllFinish) {
+            onAllFinish();
+          }
+          resolve && resolve();
+        };
+
+        if (img && typeof img[_LENGTH_] != _UNDEFINED_) {
+          // an array like structure of img elements
+          var injectIndex = 0;
+          var injectCount = img[_LENGTH_];
+
+          if (injectCount == 0) {
+            allFinish();
+          } else {
+            var finish = function() {
+              if (++injectIndex == injectCount) {
+                allFinish();
+              }
+            };
+
+            for (var i = 0; i < injectCount; i++) {
+              SVGInjectElement(img[i], options, finish);
+            }
+          }
+        } else {
+          // only one img element
+          SVGInjectElement(img, options, allFinish);
+        }
+      };
+
+      // return a Promise object if globally available
+      return typeof Promise == _UNDEFINED_ ? run() : new Promise(run);
+    }
+
+
+    // Injects a single svg element. Options must be already merged with the default options.
+    function SVGInjectElement(imgElem, options, callback) {
+      if (imgElem) {
+        var svgInjectAttributeValue = imgElem[__SVGINJECT];
+        if (!svgInjectAttributeValue) {
+          removeEventListeners(imgElem);
+
+          if (!IS_SVG_SUPPORTED) {
+            svgNotSupported(imgElem, options);
+            callback();
+            return;
+          }
+          // Invoke beforeLoad hook if set. If the beforeLoad returns a value use it as the src for the load
+          // URL path. Else use the imgElem's src attribute value.
+          var beforeLoad = options.beforeLoad;
+          var src = (beforeLoad && beforeLoad(imgElem)) || imgElem[_GET_ATTRIBUTE_]('src');
+
+          if (!src) {
+            // If no image src attribute is set do no injection. This can only be reached by using javascript
+            // because if no src attribute is set the onload and onerror events do not get called
+            if (src === '') {
+              loadFail(imgElem, options);
+            }
+            callback();
+            return;
+          }
+
+          // set array so later calls can register callbacks
+          var onFinishCallbacks = [];
+          imgElem[__SVGINJECT] = onFinishCallbacks;
+
+          var onFinish = function() {
+            callback();
+            onFinishCallbacks.forEach(function(onFinishCallback) {
+              onFinishCallback();
+            });
+          };
+
+          var absUrl = getAbsoluteUrl(src);
+          var useCacheOption = options.useCache;
+          var makeIdsUniqueOption = options.makeIdsUnique;
+          
+          var setSvgLoadCacheValue = function(val) {
+            if (useCacheOption) {
+              svgLoadCache[absUrl].forEach(function(svgLoad) {
+                svgLoad(val);
+              });
+              svgLoadCache[absUrl] = val;
+            }
+          };
+
+          if (useCacheOption) {
+            var svgLoad = svgLoadCache[absUrl];
+
+            var handleLoadValue = function(loadValue) {
+              if (loadValue === LOAD_FAIL) {
+                loadFail(imgElem, options);
+              } else if (loadValue === SVG_INVALID) {
+                svgInvalid(imgElem, options);
+              } else {
+                var hasUniqueIds = loadValue[0];
+                var svgString = loadValue[1];
+                var uniqueIdsSvgString = loadValue[2];
+                var svgElem;
+
+                if (makeIdsUniqueOption) {
+                  if (hasUniqueIds === NULL) {
+                    // IDs for the SVG string have not been made unique before. This may happen if previous
+                    // injection of a cached SVG have been run with the option makedIdsUnique set to false
+                    svgElem = buildSvgElement(svgString, false);
+                    hasUniqueIds = makeIdsUnique(svgElem, false);
+
+                    loadValue[0] = hasUniqueIds;
+                    loadValue[2] = hasUniqueIds && svgElemToSvgString(svgElem);
+                  } else if (hasUniqueIds) {
+                    // Make IDs unique for already cached SVGs with better performance
+                    svgString = makeIdsUniqueCached(uniqueIdsSvgString);
+                  }
+                }
+
+                svgElem = svgElem || buildSvgElement(svgString, false);
+
+                inject(imgElem, svgElem, absUrl, options);
+              }
+              onFinish();
+            };
+
+            if (typeof svgLoad != _UNDEFINED_) {
+              // Value for url exists in cache
+              if (svgLoad.isCallbackQueue) {
+                // Same url has been cached, but value has not been loaded yet, so add to callbacks
+                svgLoad.push(handleLoadValue);
+              } else {
+                handleLoadValue(svgLoad);
+              }
+              return;
+            } else {
+              var svgLoad = [];
+              // set property isCallbackQueue to Array to differentiate from array with cached loaded values
+              svgLoad.isCallbackQueue = true;
+              svgLoadCache[absUrl] = svgLoad;
+            }
+          }
+
+          // Load the SVG because it is not cached or caching is disabled
+          loadSvg(absUrl, function(svgXml, svgString) {
+            // Use the XML from the XHR request if it is an instance of Document. Otherwise
+            // (for example of IE9), create the svg document from the svg string.
+            var svgElem = svgXml instanceof Document ? svgXml.documentElement : buildSvgElement(svgString, true);
+
+            var afterLoad = options.afterLoad;
+            if (afterLoad) {
+              // Invoke afterLoad hook which may modify the SVG element. After load may also return a new
+              // svg element or svg string
+              var svgElemOrSvgString = afterLoad(svgElem, svgString) || svgElem;
+              if (svgElemOrSvgString) {
+                // Update svgElem and svgString because of modifications to the SVG element or SVG string in
+                // the afterLoad hook, so the modified SVG is also used for all later cached injections
+                var isString = typeof svgElemOrSvgString == 'string';
+                svgString = isString ? svgElemOrSvgString : svgElemToSvgString(svgElem);
+                svgElem = isString ? buildSvgElement(svgElemOrSvgString, true) : svgElemOrSvgString;
+              }
+            }
+
+            if (svgElem instanceof SVGElement) {
+              var hasUniqueIds = NULL;
+              if (makeIdsUniqueOption) {
+                hasUniqueIds = makeIdsUnique(svgElem, false);
+              }
+
+              if (useCacheOption) {
+                var uniqueIdsSvgString = hasUniqueIds && svgElemToSvgString(svgElem);
+                // set an array with three entries to the load cache
+                setSvgLoadCacheValue([hasUniqueIds, svgString, uniqueIdsSvgString]);
+              }
+
+              inject(imgElem, svgElem, absUrl, options);
+            } else {
+              svgInvalid(imgElem, options);
+              setSvgLoadCacheValue(SVG_INVALID);
+            }
+            onFinish();
+          }, function() {
+            loadFail(imgElem, options);
+            setSvgLoadCacheValue(LOAD_FAIL);
+            onFinish();
+          });
+        } else {
+          if (Array.isArray(svgInjectAttributeValue)) {
+            // svgInjectAttributeValue is an array. Injection is not complete so register callback
+            svgInjectAttributeValue.push(callback);
+          } else {
+            callback();
+          }
+        }
+      } else {
+        imgNotSet();
+      }
+    }
+
+
+    /**
+     * Sets the default [options](#options) for SVGInject.
+     *
+     * @param {Object} [options] - default [options](#options) for an injection.
+     */
+    SVGInject.setOptions = function(options) {
+      defaultOptions = mergeOptions(defaultOptions, options);
+    };
+
+
+    // Create a new instance of SVGInject
+    SVGInject.create = createSVGInject;
+
+
+    /**
+     * Used in onerror Event of an `<img>` element to handle cases when the loading the original src fails
+     * (for example if file is not found or if the browser does not support SVG). This triggers a call to the
+     * options onFail hook if available. The optional second parameter will be set as the new src attribute
+     * for the img element.
+     *
+     * @param {HTMLImageElement} img - an img element
+     * @param {String} [fallbackSrc] - optional parameter fallback src
+     */
+    SVGInject.err = function(img, fallbackSrc) {
+      if (img) {
+        if (img[__SVGINJECT] != FAIL) {
+          removeEventListeners(img);
+
+          if (!IS_SVG_SUPPORTED) {
+            svgNotSupported(img, defaultOptions);
+          } else {
+            removeOnLoadAttribute(img);
+            loadFail(img, defaultOptions);
+          }
+          if (fallbackSrc) {
+            removeOnLoadAttribute(img);
+            img.src = fallbackSrc;
+          }
+        }
+      } else {
+        imgNotSet();
+      }
+    };
+
+    window[globalName] = SVGInject;
+
+    return SVGInject;
+  }
+
+  var SVGInjectInstance = createSVGInject('SVGInject');
+
+  if ( true && typeof module.exports == 'object') {
+    module.exports = SVGInjectInstance;
+  }
+})(window, document);
+
+/***/ }),
+
 /***/ "./node_modules/codemirror/addon/comment/comment.js":
 /*!**********************************************************!*\
   !*** ./node_modules/codemirror/addon/comment/comment.js ***!
@@ -15492,6 +16199,24 @@ module.exports = exports;
 
 /***/ }),
 
+/***/ "./node_modules/css-loader/dist/cjs.js?!./node_modules/normalize.css/normalize.css":
+/*!**********************************************************************************************************!*\
+  !*** ./node_modules/css-loader/dist/cjs.js??ref--3-oneOf-3-1!./node_modules/normalize.css/normalize.css ***!
+  \**********************************************************************************************************/
+/*! no static exports found */
+/***/ (function(module, exports, __webpack_require__) {
+
+// Imports
+var ___CSS_LOADER_API_IMPORT___ = __webpack_require__(/*! ../css-loader/dist/runtime/api.js */ "./node_modules/css-loader/dist/runtime/api.js");
+exports = ___CSS_LOADER_API_IMPORT___(true);
+// Module
+exports.push([module.i, "/*! normalize.css v8.0.1 | MIT License | github.com/necolas/normalize.css */\n\n/* Document\n   ========================================================================== */\n\n/**\n * 1. Correct the line height in all browsers.\n * 2. Prevent adjustments of font size after orientation changes in iOS.\n */\n\nhtml {\n  line-height: 1.15; /* 1 */\n  -webkit-text-size-adjust: 100%; /* 2 */\n}\n\n/* Sections\n   ========================================================================== */\n\n/**\n * Remove the margin in all browsers.\n */\n\nbody {\n  margin: 0;\n}\n\n/**\n * Render the `main` element consistently in IE.\n */\n\nmain {\n  display: block;\n}\n\n/**\n * Correct the font size and margin on `h1` elements within `section` and\n * `article` contexts in Chrome, Firefox, and Safari.\n */\n\nh1 {\n  font-size: 2em;\n  margin: 0.67em 0;\n}\n\n/* Grouping content\n   ========================================================================== */\n\n/**\n * 1. Add the correct box sizing in Firefox.\n * 2. Show the overflow in Edge and IE.\n */\n\nhr {\n  box-sizing: content-box; /* 1 */\n  height: 0; /* 1 */\n  overflow: visible; /* 2 */\n}\n\n/**\n * 1. Correct the inheritance and scaling of font size in all browsers.\n * 2. Correct the odd `em` font sizing in all browsers.\n */\n\npre {\n  font-family: monospace, monospace; /* 1 */\n  font-size: 1em; /* 2 */\n}\n\n/* Text-level semantics\n   ========================================================================== */\n\n/**\n * Remove the gray background on active links in IE 10.\n */\n\na {\n  background-color: transparent;\n}\n\n/**\n * 1. Remove the bottom border in Chrome 57-\n * 2. Add the correct text decoration in Chrome, Edge, IE, Opera, and Safari.\n */\n\nabbr[title] {\n  border-bottom: none; /* 1 */\n  text-decoration: underline; /* 2 */\n  text-decoration: underline dotted; /* 2 */\n}\n\n/**\n * Add the correct font weight in Chrome, Edge, and Safari.\n */\n\nb,\nstrong {\n  font-weight: bolder;\n}\n\n/**\n * 1. Correct the inheritance and scaling of font size in all browsers.\n * 2. Correct the odd `em` font sizing in all browsers.\n */\n\ncode,\nkbd,\nsamp {\n  font-family: monospace, monospace; /* 1 */\n  font-size: 1em; /* 2 */\n}\n\n/**\n * Add the correct font size in all browsers.\n */\n\nsmall {\n  font-size: 80%;\n}\n\n/**\n * Prevent `sub` and `sup` elements from affecting the line height in\n * all browsers.\n */\n\nsub,\nsup {\n  font-size: 75%;\n  line-height: 0;\n  position: relative;\n  vertical-align: baseline;\n}\n\nsub {\n  bottom: -0.25em;\n}\n\nsup {\n  top: -0.5em;\n}\n\n/* Embedded content\n   ========================================================================== */\n\n/**\n * Remove the border on images inside links in IE 10.\n */\n\nimg {\n  border-style: none;\n}\n\n/* Forms\n   ========================================================================== */\n\n/**\n * 1. Change the font styles in all browsers.\n * 2. Remove the margin in Firefox and Safari.\n */\n\nbutton,\ninput,\noptgroup,\nselect,\ntextarea {\n  font-family: inherit; /* 1 */\n  font-size: 100%; /* 1 */\n  line-height: 1.15; /* 1 */\n  margin: 0; /* 2 */\n}\n\n/**\n * Show the overflow in IE.\n * 1. Show the overflow in Edge.\n */\n\nbutton,\ninput { /* 1 */\n  overflow: visible;\n}\n\n/**\n * Remove the inheritance of text transform in Edge, Firefox, and IE.\n * 1. Remove the inheritance of text transform in Firefox.\n */\n\nbutton,\nselect { /* 1 */\n  text-transform: none;\n}\n\n/**\n * Correct the inability to style clickable types in iOS and Safari.\n */\n\nbutton,\n[type=\"button\"],\n[type=\"reset\"],\n[type=\"submit\"] {\n  -webkit-appearance: button;\n}\n\n/**\n * Remove the inner border and padding in Firefox.\n */\n\nbutton::-moz-focus-inner,\n[type=\"button\"]::-moz-focus-inner,\n[type=\"reset\"]::-moz-focus-inner,\n[type=\"submit\"]::-moz-focus-inner {\n  border-style: none;\n  padding: 0;\n}\n\n/**\n * Restore the focus styles unset by the previous rule.\n */\n\nbutton:-moz-focusring,\n[type=\"button\"]:-moz-focusring,\n[type=\"reset\"]:-moz-focusring,\n[type=\"submit\"]:-moz-focusring {\n  outline: 1px dotted ButtonText;\n}\n\n/**\n * Correct the padding in Firefox.\n */\n\nfieldset {\n  padding: 0.35em 0.75em 0.625em;\n}\n\n/**\n * 1. Correct the text wrapping in Edge and IE.\n * 2. Correct the color inheritance from `fieldset` elements in IE.\n * 3. Remove the padding so developers are not caught out when they zero out\n *    `fieldset` elements in all browsers.\n */\n\nlegend {\n  box-sizing: border-box; /* 1 */\n  color: inherit; /* 2 */\n  display: table; /* 1 */\n  max-width: 100%; /* 1 */\n  padding: 0; /* 3 */\n  white-space: normal; /* 1 */\n}\n\n/**\n * Add the correct vertical alignment in Chrome, Firefox, and Opera.\n */\n\nprogress {\n  vertical-align: baseline;\n}\n\n/**\n * Remove the default vertical scrollbar in IE 10+.\n */\n\ntextarea {\n  overflow: auto;\n}\n\n/**\n * 1. Add the correct box sizing in IE 10.\n * 2. Remove the padding in IE 10.\n */\n\n[type=\"checkbox\"],\n[type=\"radio\"] {\n  box-sizing: border-box; /* 1 */\n  padding: 0; /* 2 */\n}\n\n/**\n * Correct the cursor style of increment and decrement buttons in Chrome.\n */\n\n[type=\"number\"]::-webkit-inner-spin-button,\n[type=\"number\"]::-webkit-outer-spin-button {\n  height: auto;\n}\n\n/**\n * 1. Correct the odd appearance in Chrome and Safari.\n * 2. Correct the outline style in Safari.\n */\n\n[type=\"search\"] {\n  -webkit-appearance: textfield; /* 1 */\n  outline-offset: -2px; /* 2 */\n}\n\n/**\n * Remove the inner padding in Chrome and Safari on macOS.\n */\n\n[type=\"search\"]::-webkit-search-decoration {\n  -webkit-appearance: none;\n}\n\n/**\n * 1. Correct the inability to style clickable types in iOS and Safari.\n * 2. Change font properties to `inherit` in Safari.\n */\n\n::-webkit-file-upload-button {\n  -webkit-appearance: button; /* 1 */\n  font: inherit; /* 2 */\n}\n\n/* Interactive\n   ========================================================================== */\n\n/*\n * Add the correct display in Edge, IE 10+, and Firefox.\n */\n\ndetails {\n  display: block;\n}\n\n/*\n * Add the correct display in all browsers.\n */\n\nsummary {\n  display: list-item;\n}\n\n/* Misc\n   ========================================================================== */\n\n/**\n * Add the correct display in IE 10+.\n */\n\ntemplate {\n  display: none;\n}\n\n/**\n * Add the correct display in IE 10.\n */\n\n[hidden] {\n  display: none;\n}\n", "",{"version":3,"sources":["normalize.css"],"names":[],"mappings":"AAAA,2EAA2E;;AAE3E;+EAC+E;;AAE/E;;;EAGE;;AAEF;EACE,iBAAiB,EAAE,MAAM;EACzB,8BAA8B,EAAE,MAAM;AACxC;;AAEA;+EAC+E;;AAE/E;;EAEE;;AAEF;EACE,SAAS;AACX;;AAEA;;EAEE;;AAEF;EACE,cAAc;AAChB;;AAEA;;;EAGE;;AAEF;EACE,cAAc;EACd,gBAAgB;AAClB;;AAEA;+EAC+E;;AAE/E;;;EAGE;;AAEF;EACE,uBAAuB,EAAE,MAAM;EAC/B,SAAS,EAAE,MAAM;EACjB,iBAAiB,EAAE,MAAM;AAC3B;;AAEA;;;EAGE;;AAEF;EACE,iCAAiC,EAAE,MAAM;EACzC,cAAc,EAAE,MAAM;AACxB;;AAEA;+EAC+E;;AAE/E;;EAEE;;AAEF;EACE,6BAA6B;AAC/B;;AAEA;;;EAGE;;AAEF;EACE,mBAAmB,EAAE,MAAM;EAC3B,0BAA0B,EAAE,MAAM;EAClC,iCAAiC,EAAE,MAAM;AAC3C;;AAEA;;EAEE;;AAEF;;EAEE,mBAAmB;AACrB;;AAEA;;;EAGE;;AAEF;;;EAGE,iCAAiC,EAAE,MAAM;EACzC,cAAc,EAAE,MAAM;AACxB;;AAEA;;EAEE;;AAEF;EACE,cAAc;AAChB;;AAEA;;;EAGE;;AAEF;;EAEE,cAAc;EACd,cAAc;EACd,kBAAkB;EAClB,wBAAwB;AAC1B;;AAEA;EACE,eAAe;AACjB;;AAEA;EACE,WAAW;AACb;;AAEA;+EAC+E;;AAE/E;;EAEE;;AAEF;EACE,kBAAkB;AACpB;;AAEA;+EAC+E;;AAE/E;;;EAGE;;AAEF;;;;;EAKE,oBAAoB,EAAE,MAAM;EAC5B,eAAe,EAAE,MAAM;EACvB,iBAAiB,EAAE,MAAM;EACzB,SAAS,EAAE,MAAM;AACnB;;AAEA;;;EAGE;;AAEF;QACQ,MAAM;EACZ,iBAAiB;AACnB;;AAEA;;;EAGE;;AAEF;SACS,MAAM;EACb,oBAAoB;AACtB;;AAEA;;EAEE;;AAEF;;;;EAIE,0BAA0B;AAC5B;;AAEA;;EAEE;;AAEF;;;;EAIE,kBAAkB;EAClB,UAAU;AACZ;;AAEA;;EAEE;;AAEF;;;;EAIE,8BAA8B;AAChC;;AAEA;;EAEE;;AAEF;EACE,8BAA8B;AAChC;;AAEA;;;;;EAKE;;AAEF;EACE,sBAAsB,EAAE,MAAM;EAC9B,cAAc,EAAE,MAAM;EACtB,cAAc,EAAE,MAAM;EACtB,eAAe,EAAE,MAAM;EACvB,UAAU,EAAE,MAAM;EAClB,mBAAmB,EAAE,MAAM;AAC7B;;AAEA;;EAEE;;AAEF;EACE,wBAAwB;AAC1B;;AAEA;;EAEE;;AAEF;EACE,cAAc;AAChB;;AAEA;;;EAGE;;AAEF;;EAEE,sBAAsB,EAAE,MAAM;EAC9B,UAAU,EAAE,MAAM;AACpB;;AAEA;;EAEE;;AAEF;;EAEE,YAAY;AACd;;AAEA;;;EAGE;;AAEF;EACE,6BAA6B,EAAE,MAAM;EACrC,oBAAoB,EAAE,MAAM;AAC9B;;AAEA;;EAEE;;AAEF;EACE,wBAAwB;AAC1B;;AAEA;;;EAGE;;AAEF;EACE,0BAA0B,EAAE,MAAM;EAClC,aAAa,EAAE,MAAM;AACvB;;AAEA;+EAC+E;;AAE/E;;EAEE;;AAEF;EACE,cAAc;AAChB;;AAEA;;EAEE;;AAEF;EACE,kBAAkB;AACpB;;AAEA;+EAC+E;;AAE/E;;EAEE;;AAEF;EACE,aAAa;AACf;;AAEA;;EAEE;;AAEF;EACE,aAAa;AACf","file":"normalize.css","sourcesContent":["/*! normalize.css v8.0.1 | MIT License | github.com/necolas/normalize.css */\n\n/* Document\n   ========================================================================== */\n\n/**\n * 1. Correct the line height in all browsers.\n * 2. Prevent adjustments of font size after orientation changes in iOS.\n */\n\nhtml {\n  line-height: 1.15; /* 1 */\n  -webkit-text-size-adjust: 100%; /* 2 */\n}\n\n/* Sections\n   ========================================================================== */\n\n/**\n * Remove the margin in all browsers.\n */\n\nbody {\n  margin: 0;\n}\n\n/**\n * Render the `main` element consistently in IE.\n */\n\nmain {\n  display: block;\n}\n\n/**\n * Correct the font size and margin on `h1` elements within `section` and\n * `article` contexts in Chrome, Firefox, and Safari.\n */\n\nh1 {\n  font-size: 2em;\n  margin: 0.67em 0;\n}\n\n/* Grouping content\n   ========================================================================== */\n\n/**\n * 1. Add the correct box sizing in Firefox.\n * 2. Show the overflow in Edge and IE.\n */\n\nhr {\n  box-sizing: content-box; /* 1 */\n  height: 0; /* 1 */\n  overflow: visible; /* 2 */\n}\n\n/**\n * 1. Correct the inheritance and scaling of font size in all browsers.\n * 2. Correct the odd `em` font sizing in all browsers.\n */\n\npre {\n  font-family: monospace, monospace; /* 1 */\n  font-size: 1em; /* 2 */\n}\n\n/* Text-level semantics\n   ========================================================================== */\n\n/**\n * Remove the gray background on active links in IE 10.\n */\n\na {\n  background-color: transparent;\n}\n\n/**\n * 1. Remove the bottom border in Chrome 57-\n * 2. Add the correct text decoration in Chrome, Edge, IE, Opera, and Safari.\n */\n\nabbr[title] {\n  border-bottom: none; /* 1 */\n  text-decoration: underline; /* 2 */\n  text-decoration: underline dotted; /* 2 */\n}\n\n/**\n * Add the correct font weight in Chrome, Edge, and Safari.\n */\n\nb,\nstrong {\n  font-weight: bolder;\n}\n\n/**\n * 1. Correct the inheritance and scaling of font size in all browsers.\n * 2. Correct the odd `em` font sizing in all browsers.\n */\n\ncode,\nkbd,\nsamp {\n  font-family: monospace, monospace; /* 1 */\n  font-size: 1em; /* 2 */\n}\n\n/**\n * Add the correct font size in all browsers.\n */\n\nsmall {\n  font-size: 80%;\n}\n\n/**\n * Prevent `sub` and `sup` elements from affecting the line height in\n * all browsers.\n */\n\nsub,\nsup {\n  font-size: 75%;\n  line-height: 0;\n  position: relative;\n  vertical-align: baseline;\n}\n\nsub {\n  bottom: -0.25em;\n}\n\nsup {\n  top: -0.5em;\n}\n\n/* Embedded content\n   ========================================================================== */\n\n/**\n * Remove the border on images inside links in IE 10.\n */\n\nimg {\n  border-style: none;\n}\n\n/* Forms\n   ========================================================================== */\n\n/**\n * 1. Change the font styles in all browsers.\n * 2. Remove the margin in Firefox and Safari.\n */\n\nbutton,\ninput,\noptgroup,\nselect,\ntextarea {\n  font-family: inherit; /* 1 */\n  font-size: 100%; /* 1 */\n  line-height: 1.15; /* 1 */\n  margin: 0; /* 2 */\n}\n\n/**\n * Show the overflow in IE.\n * 1. Show the overflow in Edge.\n */\n\nbutton,\ninput { /* 1 */\n  overflow: visible;\n}\n\n/**\n * Remove the inheritance of text transform in Edge, Firefox, and IE.\n * 1. Remove the inheritance of text transform in Firefox.\n */\n\nbutton,\nselect { /* 1 */\n  text-transform: none;\n}\n\n/**\n * Correct the inability to style clickable types in iOS and Safari.\n */\n\nbutton,\n[type=\"button\"],\n[type=\"reset\"],\n[type=\"submit\"] {\n  -webkit-appearance: button;\n}\n\n/**\n * Remove the inner border and padding in Firefox.\n */\n\nbutton::-moz-focus-inner,\n[type=\"button\"]::-moz-focus-inner,\n[type=\"reset\"]::-moz-focus-inner,\n[type=\"submit\"]::-moz-focus-inner {\n  border-style: none;\n  padding: 0;\n}\n\n/**\n * Restore the focus styles unset by the previous rule.\n */\n\nbutton:-moz-focusring,\n[type=\"button\"]:-moz-focusring,\n[type=\"reset\"]:-moz-focusring,\n[type=\"submit\"]:-moz-focusring {\n  outline: 1px dotted ButtonText;\n}\n\n/**\n * Correct the padding in Firefox.\n */\n\nfieldset {\n  padding: 0.35em 0.75em 0.625em;\n}\n\n/**\n * 1. Correct the text wrapping in Edge and IE.\n * 2. Correct the color inheritance from `fieldset` elements in IE.\n * 3. Remove the padding so developers are not caught out when they zero out\n *    `fieldset` elements in all browsers.\n */\n\nlegend {\n  box-sizing: border-box; /* 1 */\n  color: inherit; /* 2 */\n  display: table; /* 1 */\n  max-width: 100%; /* 1 */\n  padding: 0; /* 3 */\n  white-space: normal; /* 1 */\n}\n\n/**\n * Add the correct vertical alignment in Chrome, Firefox, and Opera.\n */\n\nprogress {\n  vertical-align: baseline;\n}\n\n/**\n * Remove the default vertical scrollbar in IE 10+.\n */\n\ntextarea {\n  overflow: auto;\n}\n\n/**\n * 1. Add the correct box sizing in IE 10.\n * 2. Remove the padding in IE 10.\n */\n\n[type=\"checkbox\"],\n[type=\"radio\"] {\n  box-sizing: border-box; /* 1 */\n  padding: 0; /* 2 */\n}\n\n/**\n * Correct the cursor style of increment and decrement buttons in Chrome.\n */\n\n[type=\"number\"]::-webkit-inner-spin-button,\n[type=\"number\"]::-webkit-outer-spin-button {\n  height: auto;\n}\n\n/**\n * 1. Correct the odd appearance in Chrome and Safari.\n * 2. Correct the outline style in Safari.\n */\n\n[type=\"search\"] {\n  -webkit-appearance: textfield; /* 1 */\n  outline-offset: -2px; /* 2 */\n}\n\n/**\n * Remove the inner padding in Chrome and Safari on macOS.\n */\n\n[type=\"search\"]::-webkit-search-decoration {\n  -webkit-appearance: none;\n}\n\n/**\n * 1. Correct the inability to style clickable types in iOS and Safari.\n * 2. Change font properties to `inherit` in Safari.\n */\n\n::-webkit-file-upload-button {\n  -webkit-appearance: button; /* 1 */\n  font: inherit; /* 2 */\n}\n\n/* Interactive\n   ========================================================================== */\n\n/*\n * Add the correct display in Edge, IE 10+, and Firefox.\n */\n\ndetails {\n  display: block;\n}\n\n/*\n * Add the correct display in all browsers.\n */\n\nsummary {\n  display: list-item;\n}\n\n/* Misc\n   ========================================================================== */\n\n/**\n * Add the correct display in IE 10+.\n */\n\ntemplate {\n  display: none;\n}\n\n/**\n * Add the correct display in IE 10.\n */\n\n[hidden] {\n  display: none;\n}\n"]}]);
+// Exports
+module.exports = exports;
+
+
+/***/ }),
+
 /***/ "./node_modules/css-loader/dist/cjs.js?!./node_modules/vue-loader/lib/loaders/stylePostLoader.js!./node_modules/codemirror/addon/fold/foldgutter.css?vue&type=style&index=1&lang=css&":
 /*!*************************************************************************************************************************************************************************************************************!*\
   !*** ./node_modules/css-loader/dist/cjs.js??ref--3-oneOf-1-1!./node_modules/vue-loader/lib/loaders/stylePostLoader.js!./node_modules/codemirror/addon/fold/foldgutter.css?vue&type=style&index=1&lang=css& ***!
@@ -15528,108 +16253,35 @@ module.exports = exports;
 
 /***/ }),
 
-/***/ "./node_modules/css-loader/dist/runtime/api.js":
-/*!*****************************************************!*\
-  !*** ./node_modules/css-loader/dist/runtime/api.js ***!
-  \*****************************************************/
+/***/ "./node_modules/normalize.css/normalize.css":
+/*!**************************************************!*\
+  !*** ./node_modules/normalize.css/normalize.css ***!
+  \**************************************************/
 /*! no static exports found */
 /***/ (function(module, exports, __webpack_require__) {
 
-"use strict";
+// style-loader: Adds some css to the DOM by adding a <style> tag
 
+// load the styles
+var content = __webpack_require__(/*! !../css-loader/dist/cjs.js??ref--3-oneOf-3-1!./normalize.css */ "./node_modules/css-loader/dist/cjs.js?!./node_modules/normalize.css/normalize.css");
+if(typeof content === 'string') content = [[module.i, content, '']];
+if(content.locals) module.exports = content.locals;
+// add the styles to the DOM
+var add = __webpack_require__(/*! ../vue-style-loader/lib/addStylesClient.js */ "./node_modules/vue-style-loader/lib/addStylesClient.js").default
+var update = add("64f162ee", content, false, {"sourceMap":true});
+// Hot Module Replacement
+if(false) {}
 
-/*
-  MIT License http://www.opensource.org/licenses/mit-license.php
-  Author Tobias Koppers @sokra
-*/
-// css base code, injected by the css-loader
-// eslint-disable-next-line func-names
-module.exports = function (useSourceMap) {
-  var list = []; // return the list of modules as css string
+/***/ }),
 
-  list.toString = function toString() {
-    return this.map(function (item) {
-      var content = cssWithMappingToString(item, useSourceMap);
+/***/ "./node_modules/notie/dist/notie.min.js":
+/*!**********************************************!*\
+  !*** ./node_modules/notie/dist/notie.min.js ***!
+  \**********************************************/
+/*! no static exports found */
+/***/ (function(module, exports, __webpack_require__) {
 
-      if (item[2]) {
-        return "@media ".concat(item[2], " {").concat(content, "}");
-      }
-
-      return content;
-    }).join('');
-  }; // import a list of modules into the list
-  // eslint-disable-next-line func-names
-
-
-  list.i = function (modules, mediaQuery, dedupe) {
-    if (typeof modules === 'string') {
-      // eslint-disable-next-line no-param-reassign
-      modules = [[null, modules, '']];
-    }
-
-    var alreadyImportedModules = {};
-
-    if (dedupe) {
-      for (var i = 0; i < this.length; i++) {
-        // eslint-disable-next-line prefer-destructuring
-        var id = this[i][0];
-
-        if (id != null) {
-          alreadyImportedModules[id] = true;
-        }
-      }
-    }
-
-    for (var _i = 0; _i < modules.length; _i++) {
-      var item = [].concat(modules[_i]);
-
-      if (dedupe && alreadyImportedModules[item[0]]) {
-        // eslint-disable-next-line no-continue
-        continue;
-      }
-
-      if (mediaQuery) {
-        if (!item[2]) {
-          item[2] = mediaQuery;
-        } else {
-          item[2] = "".concat(mediaQuery, " and ").concat(item[2]);
-        }
-      }
-
-      list.push(item);
-    }
-  };
-
-  return list;
-};
-
-function cssWithMappingToString(item, useSourceMap) {
-  var content = item[1] || ''; // eslint-disable-next-line prefer-destructuring
-
-  var cssMapping = item[3];
-
-  if (!cssMapping) {
-    return content;
-  }
-
-  if (useSourceMap && typeof btoa === 'function') {
-    var sourceMapping = toComment(cssMapping);
-    var sourceURLs = cssMapping.sources.map(function (source) {
-      return "/*# sourceURL=".concat(cssMapping.sourceRoot || '').concat(source, " */");
-    });
-    return [content].concat(sourceURLs).concat([sourceMapping]).join('\n');
-  }
-
-  return [content].join('\n');
-} // Adapted from convert-source-map (MIT)
-
-
-function toComment(sourceMap) {
-  // eslint-disable-next-line no-undef
-  var base64 = btoa(unescape(encodeURIComponent(JSON.stringify(sourceMap))));
-  var data = "sourceMappingURL=data:application/json;charset=utf-8;base64,".concat(base64);
-  return "/*# ".concat(data, " */");
-}
+!function(e,t){ true?module.exports=t():undefined}(this,function(){return function(e){function t(s){if(n[s])return n[s].exports;var a=n[s]={i:s,l:!1,exports:{}};return e[s].call(a.exports,a,a.exports,t),a.l=!0,a.exports}var n={};return t.m=e,t.c=n,t.i=function(e){return e},t.d=function(e,n,s){t.o(e,n)||Object.defineProperty(e,n,{configurable:!1,enumerable:!0,get:s})},t.n=function(e){var n=e&&e.__esModule?function(){return e.default}:function(){return e};return t.d(n,"a",n),n},t.o=function(e,t){return Object.prototype.hasOwnProperty.call(e,t)},t.p="",t(t.s=1)}([function(e,t){e.exports=function(e){return e.webpackPolyfill||(e.deprecate=function(){},e.paths=[],e.children||(e.children=[]),Object.defineProperty(e,"loaded",{enumerable:!0,get:function(){return e.l}}),Object.defineProperty(e,"id",{enumerable:!0,get:function(){return e.i}}),e.webpackPolyfill=1),e}},function(e,t,n){"use strict";(function(e){var n,s,a,i="function"==typeof Symbol&&"symbol"==typeof Symbol.iterator?function(e){return typeof e}:function(e){return e&&"function"==typeof Symbol&&e.constructor===Symbol&&e!==Symbol.prototype?"symbol":typeof e};!function(c,o){"object"===i(t)&&"object"===i(e)?e.exports=o():(s=[],n=o,a="function"==typeof n?n.apply(t,s):n,!(void 0!==a&&(e.exports=a)))}(void 0,function(){return function(e){function t(s){if(n[s])return n[s].exports;var a=n[s]={i:s,l:!1,exports:{}};return e[s].call(a.exports,a,a.exports,t),a.l=!0,a.exports}var n={};return t.m=e,t.c=n,t.i=function(e){return e},t.d=function(e,n,s){t.o(e,n)||Object.defineProperty(e,n,{configurable:!1,enumerable:!0,get:s})},t.n=function(e){var n=e&&e.__esModule?function(){return e.default}:function(){return e};return t.d(n,"a",n),n},t.o=function(e,t){return Object.prototype.hasOwnProperty.call(e,t)},t.p="",t(t.s=0)}([function(e,t,n){function s(e,t){var n={};for(var s in e)t.indexOf(s)>=0||Object.prototype.hasOwnProperty.call(e,s)&&(n[s]=e[s]);return n}Object.defineProperty(t,"__esModule",{value:!0});var a="function"==typeof Symbol&&"symbol"===i(Symbol.iterator)?function(e){return"undefined"==typeof e?"undefined":i(e)}:function(e){return e&&"function"==typeof Symbol&&e.constructor===Symbol&&e!==Symbol.prototype?"symbol":"undefined"==typeof e?"undefined":i(e)},c=Object.assign||function(e){for(var t=1;t<arguments.length;t++){var n=arguments[t];for(var s in n)Object.prototype.hasOwnProperty.call(n,s)&&(e[s]=n[s])}return e},o={top:"top",bottom:"bottom"},r={alertTime:3,dateMonths:["January","February","March","April","May","June","July","August","September","October","November","December"],overlayClickDismiss:!0,overlayOpacity:.75,transitionCurve:"ease",transitionDuration:.3,transitionSelector:"all",classes:{container:"notie-container",textbox:"notie-textbox",textboxInner:"notie-textbox-inner",button:"notie-button",element:"notie-element",elementHalf:"notie-element-half",elementThird:"notie-element-third",overlay:"notie-overlay",backgroundSuccess:"notie-background-success",backgroundWarning:"notie-background-warning",backgroundError:"notie-background-error",backgroundInfo:"notie-background-info",backgroundNeutral:"notie-background-neutral",backgroundOverlay:"notie-background-overlay",alert:"notie-alert",inputField:"notie-input-field",selectChoiceRepeated:"notie-select-choice-repeated",dateSelectorInner:"notie-date-selector-inner",dateSelectorUp:"notie-date-selector-up"},ids:{overlay:"notie-overlay"},positions:{alert:o.top,force:o.top,confirm:o.top,input:o.top,select:o.bottom,date:o.top}},l=t.setOptions=function(e){r=c({},r,e,{classes:c({},r.classes,e.classes),ids:c({},r.ids,e.ids),positions:c({},r.positions,e.positions)})},d=function(){return new Promise(function(e){return setTimeout(e,0)})},u=function(e){return new Promise(function(t){return setTimeout(t,1e3*e)})},p=function(){document.activeElement&&document.activeElement.blur()},f=function(){var e="xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g,function(e){var t=16*Math.random()|0,n="x"===e?t:3&t|8;return n.toString(16)});return"notie-"+e},m={1:r.classes.backgroundSuccess,success:r.classes.backgroundSuccess,2:r.classes.backgroundWarning,warning:r.classes.backgroundWarning,3:r.classes.backgroundError,error:r.classes.backgroundError,4:r.classes.backgroundInfo,info:r.classes.backgroundInfo,5:r.classes.backgroundNeutral,neutral:r.classes.backgroundNeutral},v=function(){return r.transitionSelector+" "+r.transitionDuration+"s "+r.transitionCurve},b=function(e){return 13===e.keyCode},x=function(e){return 27===e.keyCode},y=function(e,t){e.classList.add(r.classes.container),e.style[t]="-10000px",document.body.appendChild(e),e.style[t]="-"+e.offsetHeight+"px",e.listener&&window.addEventListener("keydown",e.listener),d().then(function(){e.style.transition=v(),e.style[t]=0})},L=function(e,t){var n=document.getElementById(e);n&&(n.style[t]="-"+n.offsetHeight+"px",n.listener&&window.removeEventListener("keydown",n.listener),u(r.transitionDuration).then(function(){n.parentNode&&n.parentNode.removeChild(n)}))},g=function(e,t){var n=document.createElement("div");n.id=r.ids.overlay,n.classList.add(r.classes.overlay),n.classList.add(r.classes.backgroundOverlay),n.style.opacity=0,e&&r.overlayClickDismiss&&(n.onclick=function(){L(e.id,t),h()}),document.body.appendChild(n),d().then(function(){n.style.transition=v(),n.style.opacity=r.overlayOpacity})},h=function(){var e=document.getElementById(r.ids.overlay);e.style.opacity=0,u(r.transitionDuration).then(function(){e.parentNode&&e.parentNode.removeChild(e)})},k=t.hideAlerts=function(e){var t=document.getElementsByClassName(r.classes.alert);if(t.length){for(var n=0;n<t.length;n++){var s=t[n];L(s.id,s.position)}e&&u(r.transitionDuration).then(function(){return e()})}},C=t.alert=function(e){var t=e.type,n=void 0===t?4:t,s=e.text,a=e.time,i=void 0===a?r.alertTime:a,c=e.stay,o=void 0!==c&&c,l=e.position,d=void 0===l?r.positions.alert||d.top:l;p(),k();var v=document.createElement("div"),g=f();v.id=g,v.position=d,v.classList.add(r.classes.textbox),v.classList.add(m[n]),v.classList.add(r.classes.alert),v.innerHTML='<div class="'+r.classes.textboxInner+'">'+s+"</div>",v.onclick=function(){return L(g,d)},v.listener=function(e){(b(e)||x(e))&&k()},y(v,d),i&&i<1&&(i=1),!o&&i&&u(i).then(function(){return L(g,d)})},E=t.force=function(e,t){var n=e.type,s=void 0===n?5:n,a=e.text,i=e.buttonText,c=void 0===i?"OK":i,o=e.callback,l=e.position,d=void 0===l?r.positions.force||d.top:l;p(),k();var u=document.createElement("div"),v=f();u.id=v;var x=document.createElement("div");x.classList.add(r.classes.textbox),x.classList.add(r.classes.backgroundInfo),x.innerHTML='<div class="'+r.classes.textboxInner+'">'+a+"</div>";var C=document.createElement("div");C.classList.add(r.classes.button),C.classList.add(m[s]),C.innerHTML=c,C.onclick=function(){L(v,d),h(),o?o():t&&t()},u.appendChild(x),u.appendChild(C),u.listener=function(e){b(e)&&C.click()},y(u,d),g()},T=t.confirm=function(e,t,n){var s=e.text,a=e.submitText,i=void 0===a?"Yes":a,c=e.cancelText,o=void 0===c?"Cancel":c,l=e.submitCallback,d=e.cancelCallback,u=e.position,m=void 0===u?r.positions.confirm||m.top:u;p(),k();var v=document.createElement("div"),C=f();v.id=C;var E=document.createElement("div");E.classList.add(r.classes.textbox),E.classList.add(r.classes.backgroundInfo),E.innerHTML='<div class="'+r.classes.textboxInner+'">'+s+"</div>";var T=document.createElement("div");T.classList.add(r.classes.button),T.classList.add(r.classes.elementHalf),T.classList.add(r.classes.backgroundSuccess),T.innerHTML=i,T.onclick=function(){L(C,m),h(),l?l():t&&t()};var M=document.createElement("div");M.classList.add(r.classes.button),M.classList.add(r.classes.elementHalf),M.classList.add(r.classes.backgroundError),M.innerHTML=o,M.onclick=function(){L(C,m),h(),d?d():n&&n()},v.appendChild(E),v.appendChild(T),v.appendChild(M),v.listener=function(e){b(e)?T.click():x(e)&&M.click()},y(v,m),g(v,m)},M=function(e,t,n){var i=e.text,c=e.submitText,o=void 0===c?"Submit":c,l=e.cancelText,d=void 0===l?"Cancel":l,u=e.submitCallback,m=e.cancelCallback,v=e.position,C=void 0===v?r.positions.input||C.top:v,E=s(e,["text","submitText","cancelText","submitCallback","cancelCallback","position"]);p(),k();var T=document.createElement("div"),M=f();T.id=M;var H=document.createElement("div");H.classList.add(r.classes.textbox),H.classList.add(r.classes.backgroundInfo),H.innerHTML='<div class="'+r.classes.textboxInner+'">'+i+"</div>";var S=document.createElement("input");S.classList.add(r.classes.inputField),S.setAttribute("autocapitalize",E.autocapitalize||"none"),S.setAttribute("autocomplete",E.autocomplete||"off"),S.setAttribute("autocorrect",E.autocorrect||"off"),S.setAttribute("autofocus",E.autofocus||"true"),S.setAttribute("inputmode",E.inputmode||"verbatim"),S.setAttribute("max",E.max||""),S.setAttribute("maxlength",E.maxlength||""),S.setAttribute("min",E.min||""),S.setAttribute("minlength",E.minlength||""),S.setAttribute("placeholder",E.placeholder||""),S.setAttribute("spellcheck",E.spellcheck||"default"),S.setAttribute("step",E.step||"any"),S.setAttribute("type",E.type||"text"),S.value=E.value||"",E.allowed&&(S.oninput=function(){var e=void 0;if(Array.isArray(E.allowed)){for(var t="",n=E.allowed,s=0;s<n.length;s++)"an"===n[s]?t+="0-9a-zA-Z":"a"===n[s]?t+="a-zA-Z":"n"===n[s]&&(t+="0-9"),"s"===n[s]&&(t+=" ");e=new RegExp("[^"+t+"]","g")}else"object"===a(E.allowed)&&(e=E.allowed);S.value=S.value.replace(e,"")});var w=document.createElement("div");w.classList.add(r.classes.button),w.classList.add(r.classes.elementHalf),w.classList.add(r.classes.backgroundSuccess),w.innerHTML=o,w.onclick=function(){L(M,C),h(),u?u(S.value):t&&t(S.value)};var O=document.createElement("div");O.classList.add(r.classes.button),O.classList.add(r.classes.elementHalf),O.classList.add(r.classes.backgroundError),O.innerHTML=d,O.onclick=function(){L(M,C),h(),m?m(S.value):n&&n(S.value)},T.appendChild(H),T.appendChild(S),T.appendChild(w),T.appendChild(O),T.listener=function(e){b(e)?w.click():x(e)&&O.click()},y(T,C),S.focus(),g(T,C)};t.input=M;var H=t.select=function(e,t){var n=e.text,s=e.cancelText,a=void 0===s?"Cancel":s,i=e.cancelCallback,c=e.choices,o=e.position,l=void 0===o?r.positions.select||l.top:o;p(),k();var d=document.createElement("div"),u=f();d.id=u;var v=document.createElement("div");v.classList.add(r.classes.textbox),v.classList.add(r.classes.backgroundInfo),v.innerHTML='<div class="'+r.classes.textboxInner+'">'+n+"</div>",d.appendChild(v),c.forEach(function(e,t){var n=e.type,s=void 0===n?1:n,a=e.text,i=e.handler,o=document.createElement("div");o.classList.add(m[s]),o.classList.add(r.classes.button),o.classList.add(r.classes.selectChoice);var p=c[t+1];p&&!p.type&&(p.type=1),p&&p.type===s&&o.classList.add(r.classes.selectChoiceRepeated),o.innerHTML=a,o.onclick=function(){L(u,l),h(),i()},d.appendChild(o)});var b=document.createElement("div");b.classList.add(r.classes.backgroundNeutral),b.classList.add(r.classes.button),b.innerHTML=a,b.onclick=function(){L(u,l),h(),i?i():t&&t()},d.appendChild(b),d.listener=function(e){x(e)&&b.click()},y(d,l),g(d,l)},S=t.date=function(e,t,n){var s=e.value,a=void 0===s?new Date:s,i=e.submitText,c=void 0===i?"OK":i,o=e.cancelText,l=void 0===o?"Cancel":o,d=e.submitCallback,u=e.cancelCallback,m=e.position,v=void 0===m?r.positions.date||v.top:m;p(),k();var C="&#9662",E=document.createElement("div"),T=document.createElement("div"),M=document.createElement("div"),H=function(e){E.innerHTML=r.dateMonths[e.getMonth()],T.innerHTML=e.getDate(),M.innerHTML=e.getFullYear()},S=function(e){var t=new Date(a.getFullYear(),a.getMonth()+1,0).getDate(),n=e.target.textContent.replace(/^0+/,"").replace(/[^\d]/g,"").slice(0,2);Number(n)>t&&(n=t.toString()),e.target.textContent=n,Number(n)<1&&(n="1"),a.setDate(Number(n))},w=function(e){var t=e.target.textContent.replace(/^0+/,"").replace(/[^\d]/g,"").slice(0,4);e.target.textContent=t,a.setFullYear(Number(t))},O=function(e){H(a)},A=function(e){var t=new Date(a.getFullYear(),a.getMonth()+e+1,0).getDate();a.getDate()>t&&a.setDate(t),a.setMonth(a.getMonth()+e),H(a)},D=function(e){a.setDate(a.getDate()+e),H(a)},I=function(e){var t=a.getFullYear()+e;t<0?a.setFullYear(0):a.setFullYear(a.getFullYear()+e),H(a)},j=document.createElement("div"),N=f();j.id=N;var P=document.createElement("div");P.classList.add(r.classes.backgroundInfo);var F=document.createElement("div");F.classList.add(r.classes.dateSelectorInner);var Y=document.createElement("div");Y.classList.add(r.classes.button),Y.classList.add(r.classes.elementThird),Y.classList.add(r.classes.dateSelectorUp),Y.innerHTML=C;var _=document.createElement("div");_.classList.add(r.classes.button),_.classList.add(r.classes.elementThird),_.classList.add(r.classes.dateSelectorUp),_.innerHTML=C;var z=document.createElement("div");z.classList.add(r.classes.button),z.classList.add(r.classes.elementThird),z.classList.add(r.classes.dateSelectorUp),z.innerHTML=C,E.classList.add(r.classes.element),E.classList.add(r.classes.elementThird),E.innerHTML=r.dateMonths[a.getMonth()],T.classList.add(r.classes.element),T.classList.add(r.classes.elementThird),T.setAttribute("contentEditable",!0),T.addEventListener("input",S),T.addEventListener("blur",O),T.innerHTML=a.getDate(),M.classList.add(r.classes.element),M.classList.add(r.classes.elementThird),M.setAttribute("contentEditable",!0),M.addEventListener("input",w),M.addEventListener("blur",O),M.innerHTML=a.getFullYear();var U=document.createElement("div");U.classList.add(r.classes.button),U.classList.add(r.classes.elementThird),U.innerHTML=C;var B=document.createElement("div");B.classList.add(r.classes.button),B.classList.add(r.classes.elementThird),B.innerHTML=C;var J=document.createElement("div");J.classList.add(r.classes.button),J.classList.add(r.classes.elementThird),J.innerHTML=C,Y.onclick=function(){return A(1)},_.onclick=function(){return D(1)},z.onclick=function(){return I(1)},U.onclick=function(){return A(-1)},B.onclick=function(){return D(-1)},J.onclick=function(){return I(-1)};var R=document.createElement("div");R.classList.add(r.classes.button),R.classList.add(r.classes.elementHalf),R.classList.add(r.classes.backgroundSuccess),R.innerHTML=c,R.onclick=function(){L(N,v),h(),d?d(a):t&&t(a)};var W=document.createElement("div");W.classList.add(r.classes.button),W.classList.add(r.classes.elementHalf),W.classList.add(r.classes.backgroundError),W.innerHTML=l,W.onclick=function(){L(N,v),h(),u?u(a):n&&n(a)},F.appendChild(Y),F.appendChild(_),F.appendChild(z),F.appendChild(E),F.appendChild(T),F.appendChild(M),F.appendChild(U),F.appendChild(B),F.appendChild(J),P.appendChild(F),j.appendChild(P),j.appendChild(R),j.appendChild(W),j.listener=function(e){b(e)?R.click():x(e)&&W.click()},y(j,v),g(j,v)};t.default={alert:C,force:E,confirm:T,input:M,select:H,date:S,setOptions:l,hideAlerts:k}}])})}).call(t,n(0)(e))}])});
 
 /***/ }),
 
@@ -15672,284 +16324,6 @@ var add = __webpack_require__(/*! ../../vue-style-loader/lib/addStylesClient.js 
 var update = add("43e5f2a6", content, false, {"sourceMap":true});
 // Hot Module Replacement
 if(false) {}
-
-/***/ }),
-
-/***/ "./node_modules/vue-style-loader/lib/addStylesClient.js":
-/*!**************************************************************!*\
-  !*** ./node_modules/vue-style-loader/lib/addStylesClient.js ***!
-  \**************************************************************/
-/*! exports provided: default */
-/***/ (function(module, __webpack_exports__, __webpack_require__) {
-
-"use strict";
-__webpack_require__.r(__webpack_exports__);
-/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "default", function() { return addStylesClient; });
-/* harmony import */ var _listToStyles__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./listToStyles */ "./node_modules/vue-style-loader/lib/listToStyles.js");
-/*
-  MIT License http://www.opensource.org/licenses/mit-license.php
-  Author Tobias Koppers @sokra
-  Modified by Evan You @yyx990803
-*/
-
-
-
-var hasDocument = typeof document !== 'undefined'
-
-if (typeof DEBUG !== 'undefined' && DEBUG) {
-  if (!hasDocument) {
-    throw new Error(
-    'vue-style-loader cannot be used in a non-browser environment. ' +
-    "Use { target: 'node' } in your Webpack config to indicate a server-rendering environment."
-  ) }
-}
-
-/*
-type StyleObject = {
-  id: number;
-  parts: Array<StyleObjectPart>
-}
-
-type StyleObjectPart = {
-  css: string;
-  media: string;
-  sourceMap: ?string
-}
-*/
-
-var stylesInDom = {/*
-  [id: number]: {
-    id: number,
-    refs: number,
-    parts: Array<(obj?: StyleObjectPart) => void>
-  }
-*/}
-
-var head = hasDocument && (document.head || document.getElementsByTagName('head')[0])
-var singletonElement = null
-var singletonCounter = 0
-var isProduction = false
-var noop = function () {}
-var options = null
-var ssrIdKey = 'data-vue-ssr-id'
-
-// Force single-tag solution on IE6-9, which has a hard limit on the # of <style>
-// tags it will allow on a page
-var isOldIE = typeof navigator !== 'undefined' && /msie [6-9]\b/.test(navigator.userAgent.toLowerCase())
-
-function addStylesClient (parentId, list, _isProduction, _options) {
-  isProduction = _isProduction
-
-  options = _options || {}
-
-  var styles = Object(_listToStyles__WEBPACK_IMPORTED_MODULE_0__["default"])(parentId, list)
-  addStylesToDom(styles)
-
-  return function update (newList) {
-    var mayRemove = []
-    for (var i = 0; i < styles.length; i++) {
-      var item = styles[i]
-      var domStyle = stylesInDom[item.id]
-      domStyle.refs--
-      mayRemove.push(domStyle)
-    }
-    if (newList) {
-      styles = Object(_listToStyles__WEBPACK_IMPORTED_MODULE_0__["default"])(parentId, newList)
-      addStylesToDom(styles)
-    } else {
-      styles = []
-    }
-    for (var i = 0; i < mayRemove.length; i++) {
-      var domStyle = mayRemove[i]
-      if (domStyle.refs === 0) {
-        for (var j = 0; j < domStyle.parts.length; j++) {
-          domStyle.parts[j]()
-        }
-        delete stylesInDom[domStyle.id]
-      }
-    }
-  }
-}
-
-function addStylesToDom (styles /* Array<StyleObject> */) {
-  for (var i = 0; i < styles.length; i++) {
-    var item = styles[i]
-    var domStyle = stylesInDom[item.id]
-    if (domStyle) {
-      domStyle.refs++
-      for (var j = 0; j < domStyle.parts.length; j++) {
-        domStyle.parts[j](item.parts[j])
-      }
-      for (; j < item.parts.length; j++) {
-        domStyle.parts.push(addStyle(item.parts[j]))
-      }
-      if (domStyle.parts.length > item.parts.length) {
-        domStyle.parts.length = item.parts.length
-      }
-    } else {
-      var parts = []
-      for (var j = 0; j < item.parts.length; j++) {
-        parts.push(addStyle(item.parts[j]))
-      }
-      stylesInDom[item.id] = { id: item.id, refs: 1, parts: parts }
-    }
-  }
-}
-
-function createStyleElement () {
-  var styleElement = document.createElement('style')
-  styleElement.type = 'text/css'
-  head.appendChild(styleElement)
-  return styleElement
-}
-
-function addStyle (obj /* StyleObjectPart */) {
-  var update, remove
-  var styleElement = document.querySelector('style[' + ssrIdKey + '~="' + obj.id + '"]')
-
-  if (styleElement) {
-    if (isProduction) {
-      // has SSR styles and in production mode.
-      // simply do nothing.
-      return noop
-    } else {
-      // has SSR styles but in dev mode.
-      // for some reason Chrome can't handle source map in server-rendered
-      // style tags - source maps in <style> only works if the style tag is
-      // created and inserted dynamically. So we remove the server rendered
-      // styles and inject new ones.
-      styleElement.parentNode.removeChild(styleElement)
-    }
-  }
-
-  if (isOldIE) {
-    // use singleton mode for IE9.
-    var styleIndex = singletonCounter++
-    styleElement = singletonElement || (singletonElement = createStyleElement())
-    update = applyToSingletonTag.bind(null, styleElement, styleIndex, false)
-    remove = applyToSingletonTag.bind(null, styleElement, styleIndex, true)
-  } else {
-    // use multi-style-tag mode in all other cases
-    styleElement = createStyleElement()
-    update = applyToTag.bind(null, styleElement)
-    remove = function () {
-      styleElement.parentNode.removeChild(styleElement)
-    }
-  }
-
-  update(obj)
-
-  return function updateStyle (newObj /* StyleObjectPart */) {
-    if (newObj) {
-      if (newObj.css === obj.css &&
-          newObj.media === obj.media &&
-          newObj.sourceMap === obj.sourceMap) {
-        return
-      }
-      update(obj = newObj)
-    } else {
-      remove()
-    }
-  }
-}
-
-var replaceText = (function () {
-  var textStore = []
-
-  return function (index, replacement) {
-    textStore[index] = replacement
-    return textStore.filter(Boolean).join('\n')
-  }
-})()
-
-function applyToSingletonTag (styleElement, index, remove, obj) {
-  var css = remove ? '' : obj.css
-
-  if (styleElement.styleSheet) {
-    styleElement.styleSheet.cssText = replaceText(index, css)
-  } else {
-    var cssNode = document.createTextNode(css)
-    var childNodes = styleElement.childNodes
-    if (childNodes[index]) styleElement.removeChild(childNodes[index])
-    if (childNodes.length) {
-      styleElement.insertBefore(cssNode, childNodes[index])
-    } else {
-      styleElement.appendChild(cssNode)
-    }
-  }
-}
-
-function applyToTag (styleElement, obj) {
-  var css = obj.css
-  var media = obj.media
-  var sourceMap = obj.sourceMap
-
-  if (media) {
-    styleElement.setAttribute('media', media)
-  }
-  if (options.ssrId) {
-    styleElement.setAttribute(ssrIdKey, obj.id)
-  }
-
-  if (sourceMap) {
-    // https://developer.chrome.com/devtools/docs/javascript-debugging
-    // this makes source maps inside style tags work properly in Chrome
-    css += '\n/*# sourceURL=' + sourceMap.sources[0] + ' */'
-    // http://stackoverflow.com/a/26603875
-    css += '\n/*# sourceMappingURL=data:application/json;base64,' + btoa(unescape(encodeURIComponent(JSON.stringify(sourceMap)))) + ' */'
-  }
-
-  if (styleElement.styleSheet) {
-    styleElement.styleSheet.cssText = css
-  } else {
-    while (styleElement.firstChild) {
-      styleElement.removeChild(styleElement.firstChild)
-    }
-    styleElement.appendChild(document.createTextNode(css))
-  }
-}
-
-
-/***/ }),
-
-/***/ "./node_modules/vue-style-loader/lib/listToStyles.js":
-/*!***********************************************************!*\
-  !*** ./node_modules/vue-style-loader/lib/listToStyles.js ***!
-  \***********************************************************/
-/*! exports provided: default */
-/***/ (function(module, __webpack_exports__, __webpack_require__) {
-
-"use strict";
-__webpack_require__.r(__webpack_exports__);
-/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "default", function() { return listToStyles; });
-/**
- * Translates the list format produced by css-loader into something
- * easier to manipulate.
- */
-function listToStyles (parentId, list) {
-  var styles = []
-  var newStyles = {}
-  for (var i = 0; i < list.length; i++) {
-    var item = list[i]
-    var id = item[0]
-    var css = item[1]
-    var media = item[2]
-    var sourceMap = item[3]
-    var part = {
-      id: parentId + ':' + i,
-      css: css,
-      media: media,
-      sourceMap: sourceMap
-    }
-    if (!newStyles[id]) {
-      styles.push(newStyles[id] = { id: id, parts: [part] })
-    } else {
-      newStyles[id].parts.push(part)
-    }
-  }
-  return styles
-}
-
 
 /***/ })
 

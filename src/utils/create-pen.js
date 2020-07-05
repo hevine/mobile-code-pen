@@ -42,6 +42,12 @@ export default ({ name, editor, components} = {})=>{
                 readOnly: 'readonly' in this.$route.query, //也可设置只读模式
             });
 
+            this.editor.on('change', e=>{
+                this.updateCode({ code: e.getValue(), type: name })
+                this.editorChanged({ status: 'changed'});
+
+            })
+
             this.editor.on('focus', ()=>{
                 if(this.activePen !== name ){
                     this.setActivePen(name);
@@ -54,7 +60,7 @@ export default ({ name, editor, components} = {})=>{
             })
         },
         methods:{
-            ...mapActions(['setActivePen'])
+            ...mapActions(['setActivePen', 'updateCode','editorChanged'])
         },
         components:{
             ...components,

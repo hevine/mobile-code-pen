@@ -32,6 +32,16 @@ export default function (el, opts = {}){
         ...opts,
     })
 
+    //设置editor的
+    editor.setOption('extraKeys',{
+        ...editor.getOption('extraKeys'),
+        Tab(cm){
+            if(cm.somethingSelected()){
+                cm.indentSelection('add')
+            }
+        }
+    })
+
     return editor;
 }
 
